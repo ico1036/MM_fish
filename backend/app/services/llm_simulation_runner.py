@@ -46,18 +46,21 @@ class LLMSimulationRunner:
         self._agent_actions: list[dict] = []  # Per-tick action log
 
     def _seed_orderbook(self) -> None:
-        """Place initial liquidity: 5 levels each side of mid."""
+        """Place initial liquidity: 10 levels each side of mid with substantial depth."""
         mid = self.initial_mid_price
-        level_step = mid * 0.001
-        for i in range(1, 6):
+        # Use tighter level spacing for more realistic book
+        level_step = mid * 0.0002  # 2bps per level
+        for i in range(1, 11):
             bid_price = mid - i * level_step
             ask_price = mid + i * level_step
+            # More depth at tighter levels (pyramid shape)
+            qty = 20.0 / i
             self.lob.add_order(
                 Order(
                     timestamp=0.0,
                     side=Side.BID,
                     price=bid_price,
-                    quantity=10.0,
+                    quantity=qty,
                     order_type=OrderType.LIMIT,
                     agent_id="seed",
                 )
@@ -67,7 +70,7 @@ class LLMSimulationRunner:
                     timestamp=0.0,
                     side=Side.ASK,
                     price=ask_price,
-                    quantity=10.0,
+                    quantity=qty,
                     order_type=OrderType.LIMIT,
                     agent_id="seed",
                 )

@@ -103,8 +103,12 @@ def compute_fat_tails(prices: np.ndarray, tail_fraction: float = 0.05) -> dict:
     tail_values = abs_returns[:n_tail]
 
     # Hill estimator
-    log_ratios = np.log(tail_values[:-1] / tail_values[-1])
-    hill = float(1.0 / np.mean(log_ratios)) if np.mean(log_ratios) > 0 else 0.0
+    if tail_values[-1] > 0:
+        log_ratios = np.log(tail_values[:-1] / tail_values[-1])
+        mean_log = float(np.mean(log_ratios))
+        hill = float(1.0 / mean_log) if mean_log > 0 else 0.0
+    else:
+        hill = 0.0
 
     # QQ plot data (normal vs empirical)
     sorted_returns = np.sort(returns)

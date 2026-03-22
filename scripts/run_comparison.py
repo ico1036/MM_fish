@@ -88,6 +88,7 @@ def main():
             seed=args.seed,
             sigma=sigma,
             llm_client=llm_client,
+            price_path=real_prices,
         )
         result.llm_records = llm_runner._records
         result.llm_summary = llm_runner.get_results_summary()

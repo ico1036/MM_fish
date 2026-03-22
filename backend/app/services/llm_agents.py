@@ -13,24 +13,24 @@ logger = logging.getLogger(__name__)
 
 # Default Poisson arrival rates by trader type
 ARRIVAL_RATES = {
-    "informed": 0.2,
-    "noise": 0.15,
-    "momentum": 0.25,
-    "mean_reversion": 0.2,
-    "fundamental": 0.1,
-    "hft": 0.6,
-    "institutional": 0.05,
+    "informed": 0.12,
+    "noise": 0.08,
+    "momentum": 0.12,
+    "mean_reversion": 0.10,
+    "fundamental": 0.06,
+    "hft": 0.25,
+    "institutional": 0.02,
 }
 
-# Default quantity multipliers by trader type
+# Default quantity multipliers by trader type (smaller = less price impact)
 QUANTITY_MULTIPLIERS = {
-    "informed": 2.0,
-    "noise": 0.5,
-    "momentum": 1.0,
-    "mean_reversion": 1.0,
-    "fundamental": 1.5,
-    "hft": 0.3,
-    "institutional": 5.0,
+    "informed": 0.8,
+    "noise": 0.2,
+    "momentum": 0.4,
+    "mean_reversion": 0.4,
+    "fundamental": 0.6,
+    "hft": 0.15,
+    "institutional": 1.5,
 }
 
 
@@ -181,25 +181,121 @@ For LIMIT orders, set price. For MARKET orders, price is null."""
         ]
 
     def _fallback_decision(self, tick: int, mid: float) -> list[Order]:
-        """Rule-based fallback when LLM is unavailable."""
-        # Simple noise: 50/50 buy/sell with small quantity
+        """Type-aware rule-based fallback when LLM is unavailable."""
+        trader_type = self.profile.trader_type
+
+        if trader_type == "noise":
+            return self._fallback_noise(tick, mid)
+        elif trader_type == "momentum":
+            return self._fallback_momentum(tick, mid)
+        elif trader_type == "mean_reversion":
+            return self._fallback_mean_reversion(tick, mid)
+        elif trader_type == "hft":
+            return self._fallback_hft(tick, mid)
+        elif trader_type == "fundamental":
+            return self._fallback_fundamental(tick, mid)
+        elif trader_type == "institutional":
+            return self._fallback_institutional(tick, mid)
+        elif trader_type == "informed":
+            return self._fallback_noise(tick, mid)  # informed without LLM = noise
+        else:
+            return self._fallback_noise(tick, mid)
+
+    def _fallback_noise(self, tick: int, mid: float) -> list[Order]:
+        """Noise trader: random small limit orders around mid."""
         if self._rng.random() < 0.5:
-            return []  # Most of the time, just hold on fallback
-
+            return []
         side = Side.BID if self._rng.random() < 0.5 else Side.ASK
-        offset = self._rng.uniform(0, mid * 0.002)
+        offset = self._rng.uniform(0, mid * 0.001)
         price = mid - offset if side == Side.BID else mid + offset
+        return [Order(
+            timestamp=float(tick), side=side, price=price,
+            quantity=self.base_quantity * 0.3,
+            order_type=OrderType.LIMIT, agent_id=self.agent_id,
+        )]
 
-        return [
-            Order(
-                timestamp=float(tick),
-                side=side,
-                price=price,
-                quantity=self.base_quantity * self._qty_mult * 0.5,
-                order_type=OrderType.LIMIT,
-                agent_id=self.agent_id,
-            )
-        ]
+    def _fallback_momentum(self, tick: int, mid: float) -> list[Order]:
+        """Momentum: buy on up-trend, sell on down-trend."""
+        if len(self._recent_prices) < 5:
+            return []
+        pct = (mid - self._recent_prices[-5]) / self._recent_prices[-5]
+        if abs(pct) < 0.0001:  # no signal
+            return []
+        side = Side.BID if pct > 0 else Side.ASK
+        # Limit order close to mid
+        offset = mid * 0.0003
+        price = mid - offset if side == Side.BID else mid + offset
+        return [Order(
+            timestamp=float(tick), side=side, price=price,
+            quantity=self.base_quantity * 0.5,
+            order_type=OrderType.LIMIT, agent_id=self.agent_id,
+        )]
+
+    def _fallback_mean_reversion(self, tick: int, mid: float) -> list[Order]:
+        """Mean reversion: fade moves away from rolling average."""
+        if len(self._recent_prices) < 10:
+            return []
+        avg = np.mean(self._recent_prices[-10:])
+        dev = (mid - avg) / avg
+        if abs(dev) < 0.0002:
+            return []
+        # Fade the move: sell if above avg, buy if below
+        side = Side.ASK if dev > 0 else Side.BID
+        price = avg  # target the mean
+        return [Order(
+            timestamp=float(tick), side=side, price=price,
+            quantity=self.base_quantity * 0.5,
+            order_type=OrderType.LIMIT, agent_id=self.agent_id,
+        )]
+
+    def _fallback_hft(self, tick: int, mid: float) -> list[Order]:
+        """HFT: tight limit orders very close to mid, both sides."""
+        orders = []
+        offset = mid * 0.00005  # very tight
+        # Alternate buy/sell to keep inventory flat
+        if self.inventory > 0.1:
+            side = Side.ASK
+        elif self.inventory < -0.1:
+            side = Side.BID
+        else:
+            side = Side.BID if self._rng.random() < 0.5 else Side.ASK
+
+        price = mid - offset if side == Side.BID else mid + offset
+        orders.append(Order(
+            timestamp=float(tick), side=side, price=price,
+            quantity=self.base_quantity * 0.2,
+            order_type=OrderType.LIMIT, agent_id=self.agent_id,
+        ))
+        return orders
+
+    def _fallback_fundamental(self, tick: int, mid: float) -> list[Order]:
+        """Fundamental: anchored to initial price, mean-reverts slowly."""
+        if len(self._recent_prices) < 2:
+            return []
+        # Use first seen price as fundamental value
+        fundamental = self._recent_prices[0]
+        dev = (mid - fundamental) / fundamental
+        if abs(dev) < 0.0005:
+            return []
+        side = Side.ASK if dev > 0 else Side.BID
+        return [Order(
+            timestamp=float(tick), side=side, price=fundamental,
+            quantity=self.base_quantity * 0.8,
+            order_type=OrderType.LIMIT, agent_id=self.agent_id,
+        )]
+
+    def _fallback_institutional(self, tick: int, mid: float) -> list[Order]:
+        """Institutional: infrequent large limit orders."""
+        if self._rng.random() < 0.9:  # very infrequent
+            return []
+        side = Side.BID if self._rng.random() < 0.5 else Side.ASK
+        offset = mid * 0.0005
+        price = mid - offset if side == Side.BID else mid + offset
+        return [Order(
+            timestamp=float(tick), side=side, price=price,
+            quantity=self.base_quantity * 2.0,
+            order_type=OrderType.LIMIT, agent_id=self.agent_id,
+        )]
 
     def on_fill(self, side: Side, price: float, quantity: float) -> None:
         """Update state when an order is filled."""

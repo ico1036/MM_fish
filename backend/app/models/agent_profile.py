@@ -23,12 +23,12 @@ class TraderProfile(BaseModel):
 
 # Default agent composition percentages
 AGENT_COMPOSITION = {
-    "informed": 0.10,
-    "noise": 0.40,
+    "informed": 0.08,
+    "noise": 0.30,
     "momentum": 0.15,
-    "mean_reversion": 0.10,
-    "fundamental": 0.10,
-    "hft": 0.10,
+    "mean_reversion": 0.15,
+    "fundamental": 0.12,
+    "hft": 0.15,
     "institutional": 0.05,
 }
 

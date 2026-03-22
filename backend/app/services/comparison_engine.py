@@ -129,6 +129,7 @@ def run_llm_simulation(
     gamma: float = 0.1,
     sigma: float = 0.01,
     llm_client: LLMClient | None = None,
+    price_path: np.ndarray | None = None,
 ) -> LLMSimulationRunner:
     """
     Run LLM-based heterogeneous agent simulation.
@@ -141,6 +142,7 @@ def run_llm_simulation(
         gamma: MM risk aversion.
         sigma: Volatility estimate.
         llm_client: LLM client (creates new if None).
+        price_path: Real price path for informed/fundamental agents.
 
     Returns:
         Completed LLMSimulationRunner in "llm" mode.
@@ -162,17 +164,37 @@ def run_llm_simulation(
         },
     )
 
-    # Generate agent profiles
+    # Generate LLM agent profiles
     profiles = generate_profiles_deterministic(total_agents=num_agents, seed=seed)
 
     # Create LLM agents
     client = llm_client or LLMClient()
-    agents = create_llm_agents(profiles, client, base_quantity=1.0, seed=seed)
+    llm_agents = create_llm_agents(profiles, client, base_quantity=1.0, seed=seed)
+
+    # Add rule-based anchoring agents for price discovery and liquidity
+    # These ensure the LOB stays deep and prices stay realistic
+    rule_agents: list = [
+        NoiseTrader("llm_noise_bg_1", {"arrival_rate": 1.0, "market_order_pct": 0.3, "max_spread": initial_mid_price * 0.003, "quantity": 0.5, "seed": seed + 100}),
+        NoiseTrader("llm_noise_bg_2", {"arrival_rate": 0.8, "market_order_pct": 0.2, "max_spread": initial_mid_price * 0.002, "quantity": 0.5, "seed": seed + 103}),
+        NoiseTrader("llm_noise_bg_3", {"arrival_rate": 0.5, "market_order_pct": 0.4, "max_spread": initial_mid_price * 0.004, "quantity": 1.0, "seed": seed + 104}),
+        Fundamentalist("llm_fund_bg_1", {"fundamental_value": initial_mid_price, "threshold": initial_mid_price * 0.003, "aggression": 0.5, "quantity": 1.5, "seed": seed + 101}),
+    ]
+
+    # Add informed trader with real price path if available
+    if price_path is not None:
+        informed = InformedTrader("llm_informed_bg_1", {
+            "look_ahead": 10, "accuracy": 0.7, "arrival_rate": 0.3,
+            "quantity": 3.0, "seed": seed + 102,
+        })
+        informed.set_future_prices(price_path.tolist())
+        rule_agents.append(informed)
+
+    all_agents = llm_agents + rule_agents
 
     runner = LLMSimulationRunner(
         lob=lob,
         mm_agent=mm,
-        agents=agents,
+        agents=all_agents,
         max_ticks=max_ticks,
         initial_mid_price=initial_mid_price,
         seed=seed,
@@ -313,6 +335,7 @@ def run_comparison(
         seed=seed,
         sigma=sigma,
         llm_client=llm_client,
+        price_path=real_prices,
     )
     result.llm_records = llm_runner._records
     result.llm_summary = llm_runner.get_results_summary()
