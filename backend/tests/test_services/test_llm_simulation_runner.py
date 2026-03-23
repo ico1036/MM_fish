@@ -206,3 +206,52 @@ class TestPriceAndSpreadSeries:
         spreads = runner.get_spread_series()
         assert len(spreads) == 100
         assert all(s >= 0 for s in spreads)
+
+
+class TestPerpetualSimulation:
+    def _make_runner(self, max_ticks=50, num_agents=5):
+        from app.services.scenario_engine import Scenario, ScenarioEngine
+        from app.services.rwa_personas import generate_rwa_profiles
+        from app.services.llm_agents import create_llm_agents
+
+        lob = LOBEngine(tick_size=0.01)
+        mm = HelixMMAgent(agent_id="mm", params={
+            "gamma": 0.1, "k": 1.5, "sigma": 0.01, "T": 1.0, "quantity": 1.0, "max_inventory": 10,
+        })
+        mock_client = MagicMock()
+        mock_client.chat_json.return_value = {"plan": [], "reassess_after": 10}
+        profiles = generate_rwa_profiles(total_agents=num_agents, seed=42)
+        agents = create_llm_agents(profiles, mock_client, seed=42)
+        scenario = Scenario.normal_listing(initial_price=100.0, num_ticks=max_ticks, seed=42)
+        return LLMSimulationRunner(
+            lob=lob, mm_agent=mm, agents=agents,
+            max_ticks=max_ticks, initial_mid_price=100.0, seed=42, mode="llm",
+            scenario=ScenarioEngine(scenario),
+        )
+
+    def test_runs_and_records_index_price(self):
+        runner = self._make_runner()
+        records = runner.run()
+        assert len(records) == 50
+        assert records[0].index_price is not None
+
+    def test_funding_rate_recorded_on_funding_ticks(self):
+        runner = self._make_runner(max_ticks=200)
+        records = runner.run()
+        # Default funding interval = 100, so tick 100 (index 100) should have funding
+        assert records[100].funding_rate is not None
+
+    def test_backward_compat_as_mode(self):
+        """A-S mode (no scenario) should still work exactly as before."""
+        lob = LOBEngine(tick_size=0.01)
+        mm = HelixMMAgent(agent_id="mm", params={
+            "gamma": 0.1, "k": 1.5, "sigma": 0.01, "T": 1.0, "quantity": 1.0, "max_inventory": 10,
+        })
+        agents = [NoiseTrader("n1", {"arrival_rate": 0.5, "market_order_pct": 0.3, "max_spread": 0.5, "quantity": 1.0, "seed": 42})]
+        runner = LLMSimulationRunner(
+            lob=lob, mm_agent=mm, agents=agents,
+            max_ticks=50, initial_mid_price=100.0, seed=42, mode="as",
+        )
+        records = runner.run()
+        assert len(records) == 50
+        assert records[0].index_price is None  # No scenario in A-S mode
