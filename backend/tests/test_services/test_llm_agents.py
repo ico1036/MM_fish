@@ -6,6 +6,7 @@ import pytest
 from app.models.agent_profile import TraderProfile
 from app.models.market import LOBSnapshot, Side, OrderType
 from app.services.llm_agents import LLMTrader, create_llm_agents, ARRIVAL_RATES
+from app.services.plan_executor import AgentPlan
 
 
 @pytest.fixture
@@ -121,18 +122,16 @@ class TestLLMTraderHoldDecision:
         assert orders == []
 
 
-class TestLLMTraderFallback:
-    def test_fallback_on_llm_error(self, sample_profile, mock_llm_client, lob_snapshot):
+class TestLLMTraderError:
+    def test_raises_on_llm_error(self, sample_profile, mock_llm_client, lob_snapshot):
         mock_llm_client.chat_json.side_effect = Exception("API error")
         trader = LLMTrader(sample_profile, mock_llm_client, seed=42)
         trader._arrival_rate = 1.0
 
-        # Should not raise, uses fallback
-        orders = trader.generate_orders(1, lob_snapshot)
-        assert isinstance(orders, list)
-        assert trader._fallback_count == 1
+        with pytest.raises(Exception, match="API error"):
+            trader.generate_orders(1, lob_snapshot)
 
-    def test_fallback_on_empty_response(self, sample_profile, mock_llm_client, lob_snapshot):
+    def test_empty_response_parsed_as_hold(self, sample_profile, mock_llm_client, lob_snapshot):
         mock_llm_client.chat_json.return_value = {}
         trader = LLMTrader(sample_profile, mock_llm_client, seed=0)
         trader._arrival_rate = 1.0
@@ -226,3 +225,32 @@ class TestCreateLLMAgents:
         # Different seeds should produce different random states
         randoms = [a._rng.random() for a in agents]
         assert len(set(randoms)) == 3  # All unique
+
+
+class TestLLMTraderPlan:
+    def test_generate_plan_returns_agent_plan(self, sample_profile, mock_llm_client, lob_snapshot):
+        mock_llm_client.chat_json.return_value = {
+            "plan": [
+                {"tick_offset": 0, "action": "BUY", "type": "LIMIT", "price": 99.0, "quantity": 1.0},
+                {"tick_offset": 5, "action": "SELL", "type": "LIMIT", "price": 101.0, "quantity": 1.0},
+            ],
+            "reassess_after": 10,
+        }
+        trader = LLMTrader(sample_profile, mock_llm_client, seed=0)
+        plan = trader.generate_plan(tick=10, lob_snapshot=lob_snapshot)
+        assert isinstance(plan, AgentPlan)
+        assert plan.agent_id == "momentum_001"
+        assert plan.start_tick == 10
+        assert plan.reassess_tick == 20
+        assert 10 in plan.orders
+        assert 15 in plan.orders
+
+    def test_generate_plan_hold_only(self, sample_profile, mock_llm_client, lob_snapshot):
+        mock_llm_client.chat_json.return_value = {
+            "plan": [],
+            "reassess_after": 10,
+        }
+        trader = LLMTrader(sample_profile, mock_llm_client, seed=0)
+        plan = trader.generate_plan(tick=0, lob_snapshot=lob_snapshot)
+        assert plan.orders == {}
+        assert plan.reassess_tick == 10
