@@ -2,7 +2,7 @@
 
 from app.models.market import LOBSnapshot, Order, OrderType, Side
 from app.services.market_agents import MarketAgent
-from app.utils.math_utils import compute_quotes
+from app.utils.math_utils import compute_quotes, optimal_spread, reservation_price
 
 
 class HelixMMAgent(MarketAgent):
@@ -36,9 +36,16 @@ class HelixMMAgent(MarketAgent):
         self._max_ticks: int = 1000  # set by runner
         self._current_tick: int = 0
 
+        # Funding rate awareness
+        self._funding_rate: float = 0.0
+
     def set_max_ticks(self, max_ticks: int) -> None:
         """Set total simulation ticks for T calculation."""
         self._max_ticks = max_ticks
+
+    def set_funding_rate(self, rate: float) -> None:
+        """Set the current funding rate for spread/reservation adjustments."""
+        self._funding_rate = rate
 
     @property
     def remaining_time(self) -> float:
@@ -64,14 +71,23 @@ class HelixMMAgent(MarketAgent):
             return []
 
         T_remaining = self.remaining_time
-        bid_price, ask_price = compute_quotes(
-            mid_price=mid,
-            inventory=self.inventory,
-            gamma=self.gamma,
-            sigma=self.sigma,
-            T=max(T_remaining, 0.001),  # avoid T=0 edge
-            k=self.k,
-        )
+        T_eff = max(T_remaining, 0.001)  # avoid T=0 edge
+        q = self.inventory
+
+        r = reservation_price(mid, q, self.gamma, self.sigma, T_eff)
+        delta = optimal_spread(self.gamma, self.sigma, T_eff, self.k)
+
+        # Funding rate adjustments
+        # 1. Widen spread proportional to funding volatility
+        funding_spread_adj = abs(self._funding_rate) * mid * 50
+        delta += funding_spread_adj
+
+        # 2. Shift reservation to reduce costly inventory direction
+        funding_cost = self._funding_rate * q * mid * 0.1
+        r -= funding_cost
+
+        bid_price = r - delta / 2.0
+        ask_price = r + delta / 2.0
 
         orders: list[Order] = []
 

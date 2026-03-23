@@ -4,6 +4,39 @@ from app.models.market import LOBSnapshot, Side
 from app.services.mm_agent import HelixMMAgent
 
 
+class TestMMAgentFundingAdjustment:
+    def test_widens_spread_on_high_funding(self):
+        mm = HelixMMAgent(agent_id="mm", params={
+            "gamma": 0.1, "k": 1.5, "sigma": 0.01, "T": 1.0, "quantity": 1.0, "max_inventory": 10,
+        })
+        mm.set_max_ticks(100)
+        snapshot = LOBSnapshot(timestamp=1.0, best_bid=99.0, best_ask=101.0, mid_price=100.0, spread=2.0)
+
+        mm.set_funding_rate(0.0)
+        orders_normal = mm.generate_orders(10, snapshot)
+        spread_normal = orders_normal[1].price - orders_normal[0].price
+
+        mm.set_funding_rate(0.005)
+        orders_wide = mm.generate_orders(11, snapshot)
+        spread_wide = orders_wide[1].price - orders_wide[0].price
+
+        assert spread_wide > spread_normal
+
+    def test_adjusts_reservation_for_funding_cost(self):
+        mm = HelixMMAgent(agent_id="mm", params={
+            "gamma": 0.1, "k": 1.5, "sigma": 0.01, "T": 1.0, "quantity": 1.0, "max_inventory": 10,
+        })
+        mm.set_max_ticks(100)
+        mm.inventory = 5.0  # long position
+
+        snapshot = LOBSnapshot(timestamp=1.0, best_bid=99.0, best_ask=101.0, mid_price=100.0, spread=2.0)
+
+        mm.set_funding_rate(0.003)
+        orders = mm.generate_orders(10, snapshot)
+        mid_quote = (orders[0].price + orders[1].price) / 2
+        assert mid_quote < 100.0  # shifted down to reduce long exposure
+
+
 def _make_snapshot(mid: float = 100.0, spread: float = 0.1) -> LOBSnapshot:
     return LOBSnapshot(
         timestamp=0.0,
