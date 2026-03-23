@@ -4,15 +4,15 @@ import logging
 
 import numpy as np
 
-from app.models.market import LOBSnapshot
 from app.services.binance_data import get_price_path
 from app.services.lob_engine import LOBEngine
-from app.services.llm_agents import LLMTrader, create_llm_agents
+from app.services.llm_agents import create_llm_agents
 from app.services.llm_client import LLMClient
 from app.services.llm_simulation_runner import LLMSimulationRunner
 from app.services.market_agents import NoiseTrader, Fundamentalist, InformedTrader
 from app.services.mm_agent import HelixMMAgent
 from app.services.persona_generator import generate_profiles_deterministic
+from app.services.scenario_engine import ScenarioEngine
 from app.services.stylized_facts import (
     compute_all_stylized_facts,
     compute_log_returns,
@@ -123,13 +123,14 @@ def run_as_simulation(
 
 def run_llm_simulation(
     initial_mid_price: float,
+    llm_client: LLMClient,
     max_ticks: int = 1000,
     num_agents: int = 50,
     seed: int = 42,
     gamma: float = 0.1,
     sigma: float = 0.01,
-    llm_client: LLMClient | None = None,
     price_path: np.ndarray | None = None,
+    scenario: ScenarioEngine | None = None,
 ) -> LLMSimulationRunner:
     """
     Run LLM-based heterogeneous agent simulation.
@@ -141,7 +142,7 @@ def run_llm_simulation(
         seed: Random seed.
         gamma: MM risk aversion.
         sigma: Volatility estimate.
-        llm_client: LLM client (creates new if None).
+        llm_client: LLM client.
         price_path: Real price path for informed/fundamental agents.
 
     Returns:
@@ -168,8 +169,7 @@ def run_llm_simulation(
     profiles = generate_profiles_deterministic(total_agents=num_agents, seed=seed)
 
     # Create LLM agents
-    client = llm_client or LLMClient()
-    llm_agents = create_llm_agents(profiles, client, base_quantity=1.0, seed=seed)
+    llm_agents = create_llm_agents(profiles, llm_client, base_quantity=1.0, seed=seed)
 
     # Add rule-based anchoring agents for price discovery and liquidity
     # These ensure the LOB stays deep and prices stay realistic
@@ -199,6 +199,7 @@ def run_llm_simulation(
         initial_mid_price=initial_mid_price,
         seed=seed,
         mode="llm",
+        scenario=scenario,
     )
 
     runner.run()
@@ -273,13 +274,13 @@ def compute_scorecard(
 
 
 def run_comparison(
+    llm_client: LLMClient,
     symbol: str = "BTCUSDT",
     data_dir: str = "~/intraday_trading/data/futures_ticks",
     max_ticks: int = 5000,
     downsample_n: int = 100,
     num_llm_agents: int = 50,
     seed: int = 42,
-    llm_client: LLMClient | None = None,
 ) -> ComparisonResult:
     """
     Run full A-S vs LLM comparison on real Binance data.

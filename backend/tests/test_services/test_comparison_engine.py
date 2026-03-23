@@ -92,6 +92,26 @@ class TestRunLLMSimulation:
         assert summary["llm_agent_stats"]["total_llm_agents"] == 10
 
 
+class TestRunLLMSimulationWithScenario:
+    def test_runs_with_scenario(self):
+        from app.services.scenario_engine import Scenario, ScenarioEngine
+        mock_client = MagicMock()
+        mock_client.chat_json.return_value = {"plan": [], "reassess_after": 10}
+
+        scenario = Scenario.normal_listing(initial_price=100.0, num_ticks=50, seed=42)
+
+        runner = run_llm_simulation(
+            initial_mid_price=100.0,
+            llm_client=mock_client,
+            max_ticks=50,
+            num_agents=5,
+            seed=42,
+            scenario=ScenarioEngine(scenario),
+        )
+        assert len(runner._records) == 50
+        assert runner._records[0].index_price is not None
+
+
 class TestComputeScorecard:
     def test_scorecard_has_required_metrics(self, gbm_prices):
         real_facts = compute_all_stylized_facts(gbm_prices)
