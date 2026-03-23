@@ -69,3 +69,21 @@ class TestTickRecord:
         assert record.mm_bid is None
         assert record.mm_ask is None
         assert record.num_trades == 0
+
+
+class TestTickRecordPerpetual:
+    def test_tick_record_with_perp_fields(self):
+        record = TickRecord(
+            tick=1, mid_price=100.0, spread=1.0,
+            mm_inventory=0.0, mm_pnl=0.0,
+            funding_rate=0.0001, num_liquidations=2, index_price=5620.0,
+        )
+        assert record.funding_rate == 0.0001
+        assert record.num_liquidations == 2
+        assert record.index_price == 5620.0
+
+    def test_tick_record_perp_fields_default_none(self):
+        record = TickRecord(tick=1, mid_price=100.0, spread=1.0, mm_inventory=0.0, mm_pnl=0.0)
+        assert record.funding_rate is None
+        assert record.num_liquidations == 0
+        assert record.index_price is None

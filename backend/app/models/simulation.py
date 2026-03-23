@@ -47,3 +47,6 @@ class TickRecord(BaseModel):
     mm_bid: float | None = None
     mm_ask: float | None = None
     num_trades: int = 0
+    funding_rate: float | None = None
+    num_liquidations: int = 0
+    index_price: float | None = None
